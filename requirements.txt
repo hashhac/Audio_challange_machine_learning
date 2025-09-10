@@ -16,3 +16,4 @@ pathlib
 librosa
 noisereduce
 dotenv
+pyclarity
