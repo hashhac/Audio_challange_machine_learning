@@ -19,7 +19,7 @@ from numpy import ndarray
 from typing import List, Tuple, Dict, Any, Union
 from dataclasses import dataclass
 import transformers
-
+from clarity.enhancer.nalr import NALR
 
 def measure_time(func):
     def wrapper(*args, **kwargs):
@@ -44,6 +44,7 @@ def big_print_of_imports():
         print(f"seaborn version: {sns.__version__=}")
         print(f"sklearn version: {sklearn.__version__=}")
         print(f"transformers version: {transformers.__version__=}")
+        print(f"pyclarity version: {NALR.__repr__=}")
     except Exception as e:
         print(f"An error occurred during imports: {e}")
 
