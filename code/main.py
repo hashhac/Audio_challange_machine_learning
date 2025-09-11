@@ -1,5 +1,6 @@
 from pathlib import Path
 import os
+import sys
 import time 
 import torch
 import torchaudio
@@ -63,6 +64,8 @@ def dir_check():
     for path in file_paths_list:
         if not path.exists():
             os.makedirs(path)
+    for path in file_paths_list:
+        sys.path.append(str(path))
 
 if __name__ == "__main__":
     load_dotenv()
