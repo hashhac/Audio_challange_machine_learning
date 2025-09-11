@@ -49,3 +49,7 @@ class ModelRanker:
         
         plt.tight_layout()
         plt.show()
+        dir_path = os.path.join(os.path.dirname(__file__), "results", "model_comparison.png")
+        if not os.path.exists(os.path.dirname(dir_path)):
+            os.makedirs(os.path.dirname(dir_path))
+        plt.savefig(dir_path)

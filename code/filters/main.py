@@ -1,16 +1,15 @@
 import numpy as np
 import torch
+import os
 from filter_HearingAidFilterBank import HearingAidFilterBank
 from filter_ModelEvaluator import ModelEvaluator
 from filter_ModelRanker import ModelRanker
 from clarity.utils.audiogram import Audiogram
 
 
-
-
 if __name__ == "__main__":
     # Parameters for the simulation
-    
+    # check if json already exists
     n_samples = 16000 # 1 second of audio
     sr = 16000
     
@@ -38,9 +37,13 @@ if __name__ == "__main__":
     }
 
     results_files = []
-    
     # Evaluate each model
     for name, model_instance in models_to_test.items():
+        dir_path = os.path.join(os.path.dirname(__file__), "results", f"results_{name}.json")
+        if os.path.exists(dir_path):
+            print(f"Results for {name} already exist. Skipping evaluation.")
+            results_files.append(dir_path)
+            continue
         evaluator = ModelEvaluator(
             model=model_instance,
             model_name=name,
