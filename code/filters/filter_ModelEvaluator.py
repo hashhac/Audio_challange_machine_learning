@@ -4,6 +4,7 @@ import numpy as np
 import json
 import os
 from clarity.evaluator.haspi import haspi_v2
+#TODO ADD JSON PATH SETUP need to pull orginal working dir with os then pull filter path from project setup to then specify json save location
 class ModelEvaluator:
     """
     A class to train and evaluate a single model, saving results to a JSON file.
