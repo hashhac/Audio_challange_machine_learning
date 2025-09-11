@@ -35,6 +35,7 @@ if __name__ == "__main__":
         "Model_B_50_Filters": HearingAidFilterBank(n_filters=50),
         "Model_C_200_Taps": HearingAidFilterBank(n_taps=200),
     }
+    #TODO add more models as needed to evaluate a moving band bass filter and a model with non linearities, also a model with more layers etc 
 
     results_files = []
     # Evaluate each model
