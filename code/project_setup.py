@@ -17,7 +17,8 @@ def setup_project_directories():
         "neural_networks_path": work_dir / "neural_networks",
         "filter_path": work_dir / "filters",
         "predictive_models_path": work_dir / "predictive_models",
-        "plotting_path": work_dir / "plots"
+        "plotting_path": work_dir / "plots",
+        "json_path": work_dir / "json_data",
     }
 
     # Create each directory if it doesn't exist

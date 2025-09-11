@@ -1,10 +1,11 @@
+import sys
 import torch
 import torch.nn as nn
 import numpy as np
 import json
+from pathlib import Path
 import os
 from clarity.evaluator.haspi import haspi_v2
-#TODO ADD JSON PATH SETUP need to pull orginal working dir with os then pull filter path from project setup to then specify json save location
 class ModelEvaluator:
     """
     A class to train and evaluate a single model, saving results to a JSON file.
@@ -21,7 +22,10 @@ class ModelEvaluator:
         self.optimizer = optimizer(self.model.parameters(), lr=self.lr)
         self.loss_fn = loss_fn()
         self.results = []
-        self.filename = f"results_{model_name}.json"
+        filter_path = Path(__file__).parent.resolve() / "results"
+        filter_path.mkdir(parents=True, exist_ok=True)
+        filter_path = filter_path 
+        self.filename = os.path.join(filter_path, f"results_{model_name}.json")
 
     def evaluate(self):
         print(f"Starting calibration for {self.model_name}...")
