@@ -59,8 +59,9 @@ def dir_check():
     neural_networks_path = work_dir / "neural_networks"
     filter_path = work_dir / "filters"
     predictive_models_path = work_dir / "predictive_models"
+    plotting_path = work_dir / "plots"
 
-    file_paths_list = [work_dir, save_path, audio_path, audio_data, audio_validation, neural_networks_path, filter_path, predictive_models_path]
+    file_paths_list = [work_dir, save_path, audio_path, audio_data, audio_validation, neural_networks_path, filter_path, predictive_models_path, plotting_path]
     for path in file_paths_list:
         if not path.exists():
             os.makedirs(path)
