@@ -55,3 +55,4 @@ if __name__ == "__main__":
     setup_project_directories()
     big_print_of_imports()    
 
+# TODO data exploration of dataset
