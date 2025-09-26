@@ -8,10 +8,12 @@ import numpy as np
 import pandas as pd
 import json
 import logging
+from tqdm import tqdm
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# --- This pathing logic is now robust and proven to work for your setup ---
 def setup_paths():
     """Setup all necessary paths and environment variables"""
     current_file = Path(__file__).resolve()
@@ -22,113 +24,131 @@ def setup_paths():
         raise FileNotFoundError(f"Clarity path not found: {clarity_path}")
     if not baseline_path.exists():
         raise FileNotFoundError(f"Baseline path not found: {baseline_path}")
-    if str(clarity_path) not in sys.path:
-        sys.path.append(str(clarity_path))
     if str(baseline_path) not in sys.path:
         sys.path.append(str(baseline_path))
-    logging.info(f"Added to Python path: {clarity_path}")
+    logging.info(f"Project root is: {project_root}")
     logging.info(f"Added to Python path: {baseline_path}")
-    return project_root, clarity_path, baseline_path
+    return project_root, baseline_path
 
-project_root, clarity_path, PATH_TO_BASELINE_CODE = setup_paths()
+project_root, PATH_TO_BASELINE_CODE = setup_paths()
 
+# Now we can import their tools directly
 from transcription_scorer import SentenceScorer
 from shared_predict_utils import LogisticModel
-from evaluate import compute_scores
 
 class EvaluationHelper:
-    """A helper class to wrap the baseline evaluation logic."""
-    def __init__(self, load_model=False):
-        if load_model:
-            # ... (init code) ...
-            pass
-        else:
-            print("Evaluation Helper initialized without loading Whisper model.")
-
-    def run_full_evaluation_from_precomputed(self, 
-                            precomputed_valid_scores_path: Path,
-                            metadata_path: Path, 
-                            train_metadata_path: Path,
-                            precomputed_train_scores_path: Path):
-        print("--- Starting Evaluation from Precomputed Scores ---")
+    """
+    A class to perform the full end-to-end evaluation pipeline for the
+    Cadenza ICASSP 2026 challenge.
+    """
+    def __init__(self, whisper_version="base.en"):
+        print("Initializing Evaluation Helper...")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"Using device: {device}")
         
-        print("\n[Stage 1/3] SKIPPING Whisper processing. Loading precomputed validation scores...")
-        data_list_valid = []
-        with open(precomputed_valid_scores_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                data_list_valid.append(json.loads(line))
-        valid_scores_df = pd.DataFrame(data_list_valid)
-        print(f"Loaded {len(valid_scores_df)} precomputed validation scores.")
-        
-        print("\n[Stage 2/3] Calibrating predictions using logistic model...")
-        data_list_train = []
-        with open(precomputed_train_scores_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                data_list_train.append(json.loads(line))
-        train_scores_df = pd.DataFrame(data_list_train)
+        # Load the Whisper model and the Scorer on initialization
+        self.asr_model = whisper.load_model(whisper_version, device=device)
+        contractions_file = PATH_TO_BASELINE_CODE / "contractions.csv"
+        self.scorer = SentenceScorer(str(contractions_file))
+        print("Initialization complete.")
 
+    def _score_single_file(self, audio_path: Path, reference_lyrics: str) -> float:
+        """[Internal] Computes the raw Whisper correctness score for one audio file."""
+        hypothesis = self.asr_model.transcribe(
+            str(audio_path), fp16=False, language="en", temperature=0.0
+        )["text"]
+        results = self.scorer.score([reference_lyrics], [hypothesis])
+        total_words = results.substitutions + results.deletions + results.hits
+        return 0.0 if total_words == 0 else results.hits / total_words
+
+    def evaluate_audio_folder(self, 
+                              audio_dir: Path, 
+                              metadata_path: Path, 
+                              train_metadata_path: Path,
+                              precomputed_train_scores_path: Path,
+                              output_csv_path: Path):
+        """
+        Runs the full 3-stage evaluation pipeline on a folder of audio files
+        and produces the final submission CSV.
+        """
+        print(f"--- Starting Full Evaluation on folder: {audio_dir} ---")
+        
+        # --- STAGE 1: Compute Raw Scores from Audio ---
+        print("\n[Stage 1/3] Computing raw Whisper scores for your audio...")
         metadata_df = pd.read_json(metadata_path)
-        train_metadata_df = pd.read_json(train_metadata_path)
+        raw_scores = []
+        for _, row in tqdm(metadata_df.iterrows(), total=len(metadata_df), desc="Scoring Audio"):
+            signal_id = row['signal']
+            lyrics = row['prompt']
+            
+            # This logic must handle both original .flac and your enhanced .wav files
+            audio_file_flac = audio_dir / f"{signal_id}_unproc.flac"
+            audio_file_wav = audio_dir / f"{signal_id}.wav"
+            
+            audio_to_process = None
+            if audio_file_wav.exists():
+                audio_to_process = audio_file_wav
+            elif audio_file_flac.exists():
+                audio_to_process = audio_file_flac
+            
+            if audio_to_process:
+                score = self._score_single_file(audio_to_process, lyrics)
+                raw_scores.append({"signal": signal_id, "whisper.mixture": score})
+            else:
+                print(f"Warning: Could not find audio for {signal_id} (looked for .wav and .flac)")
         
+        valid_scores_df = pd.DataFrame(raw_scores)
+        print(f"Computed scores for {len(valid_scores_df)} files.")
+
+        # --- STAGE 2: Calibrate Predictions ---
+        print("\n[Stage 2/3] Calibrating predictions using logistic model...")
+        data_list_train = [json.loads(line) for line in open(precomputed_train_scores_path, 'r', encoding='utf-8')]
+        train_scores_df = pd.DataFrame(data_list_train)
+        train_metadata_df = pd.read_json(train_metadata_path)
         train_df = pd.merge(train_scores_df, train_metadata_df, on='signal')
         
         model = LogisticModel()
-        
-        # --- THIS IS THE FIX ---
-        # Use the correct key 'whisper.mixture' directly from the DataFrame
         model.fit(train_df["whisper.mixture"], train_df.correctness)
-        # -----------------------
-        
         print("Logistic model fitted on training data.")
         
-        # --- AND THE FIX HERE ---
-        # Use the correct key 'whisper.mixture' for prediction as well
+        # --- STAGE 3: Save Final Submission File ---
+        print("\n[Stage 3/3] Generating and saving submission file...")
         valid_scores_df["predicted"] = model.predict(valid_scores_df["whisper.mixture"])
-        # -----------------------
         
-        # STEP A: Save the official submission file
         submission_df = valid_scores_df[["signal", "predicted"]]
         submission_df.columns = ["signal_ID", "intelligibility_score"]
-        submission_path = project_root / "my_submission.csv"
-        submission_df.to_csv(submission_path, index=False)
-        print(f"\nOfficial submission file saved to: {submission_path}")
-
-        # STEP B: For our own validation, we merge with metadata that HAS correctness
-        # The 'valid_metadata.json' does not. Let's load the training metadata again
-        # just to get the script to run and produce a score.
-        print("\n[Stage 3/3] Computing final RMSE and NCC scores...")
-        print("NOTE: Using TRAINING data ground truth for validation, as validation ground truth is secret.")
-        
-        # We merge our validation predictions with the TRAINING ground truth
-        final_df = pd.merge(valid_scores_df, train_metadata_df, on='signal', how="inner")
-
-        if len(final_df) == 0:
-            print("CRITICAL ERROR: No matching signals found between validation scores and training metadata.")
-            # This can happen if the signal IDs are completely different between sets.
-            return None
-            
-        scores = compute_scores(final_df["predicted"], final_df["correctness"])
+        submission_df.to_csv(output_csv_path, index=False)
         
         print("\n--- Evaluation Complete! ---")
-        print(json.dumps(scores, indent=2))
-        return scores
+        print(f"Official submission file saved to: {output_csv_path}")
+        return output_csv_path
 
 
 if __name__ == '__main__':
+    # --- 1. DEFINE ALL YOUR PATHS ---
     cadenza_data_root = project_root / "code" / "audio_files" / "16981327" / "cadenza_data"
     
+    # Path to the audio you want to evaluate.
+    # To get a benchmark, point this to the original unprocessed audio.
+    # LATER, you will change this to point to your enhanced audio folder.
+    audio_to_evaluate_folder = cadenza_data_root / "valid" / "unprocessed"
+    # audio_to_evaluate_folder = project_root / "results" / "my_enhanced_audio" # <-- Your goal is to use this one
+    
+    # Paths to the metadata and precomputed score files
     valid_metadata = cadenza_data_root / "metadata" / "valid_metadata.json"
     train_metadata = cadenza_data_root / "metadata" / "train_metadata.json"
-
-    # Correct filenames
     precomputed_train_scores = PATH_TO_BASELINE_CODE / "precomputed" / "cadenza_data.train.whisper.jsonl"
-    precomputed_valid_scores = PATH_TO_BASELINE_CODE / "precomputed" / "cadenza_data.valid.whisper.jsonl"
-
-    eval_helper = EvaluationHelper(load_model=False) 
     
-    final_scores = eval_helper.run_full_evaluation_from_precomputed(
-        precomputed_valid_scores_path=precomputed_valid_scores,
+    # Path for the final output file
+    output_csv = project_root / "my_final_submission.csv"
+
+    # --- 2. CREATE AND RUN THE EVALUATOR ---
+    eval_helper = EvaluationHelper() 
+    
+    eval_helper.evaluate_audio_folder(
+        audio_dir=audio_to_evaluate_folder,
         metadata_path=valid_metadata,
         train_metadata_path=train_metadata,
-        precomputed_train_scores_path=precomputed_train_scores
+        precomputed_train_scores_path=precomputed_train_scores,
+        output_csv_path=output_csv
     )
