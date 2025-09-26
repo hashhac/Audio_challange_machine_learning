@@ -17,3 +17,8 @@ librosa
 noisereduce
 dotenv
 pyclarity
+openai-whisper
+inflect
+jiwer
+hydra-core
+pystoi

@@ -8,6 +8,8 @@ import torchaudio
 import matplotlib.pyplot as plt
 from typing import Dict, List, Optional, Tuple
 import logging
+from torch.nn.utils.rnn import pad_sequence
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -70,7 +72,39 @@ class CadenzaDataset(Dataset):
             'metadata': metadata
         }
 
+def pad_collate(batch):
+    """
+    Pads audio signals in a batch to the same length.
+    Assumes batch is a list of dictionaries.
+    """
+    # Separate the components of the batch
+    signals = [item['signal'].T for item in batch]  # Transpose to (Length, Channels) for padding
+    unprocessed = [item['unprocessed'].T for item in batch]
+    
+    # Use pad_sequence to pad the signals. batch_first=True makes the output (Batch, Length, Channels)
+    signals_padded = pad_sequence(signals, batch_first=True, padding_value=0.0)
+    unprocessed_padded = pad_sequence(unprocessed, batch_first=True, padding_value=0.0)
 
+    # We need to transpose back to (Batch, Channels, Length) for PyTorch conventions
+    signals_padded = signals_padded.permute(0, 2, 1)
+    unprocessed_padded = unprocessed_padded.permute(0, 2, 1)
+
+    # We also need to gather the other data. The default collate can handle most of it.
+    # Let's manually collect metadata and paths for clarity.
+    sample_rates = [item['sample_rate'] for item in batch]
+    signal_paths = [item['signal_path'] for item in batch]
+    unprocessed_paths = [item['unprocessed_path'] for item in batch]
+    metadata = [item['metadata'] for item in batch]
+
+    # Reconstruct the batch as a single dictionary
+    return {
+        'signal': signals_padded,
+        'unprocessed': unprocessed_padded,
+        'sample_rate': sample_rates,
+        'signal_path': signal_paths,
+        'unprocessed_path': unprocessed_paths,
+        'metadata': metadata # This will now be a list of dicts
+    }
 def get_dataset_stats(dataset_dir: Path) -> Dict:
     """
     Get comprehensive statistics about the dataset including metadata analysis
@@ -138,8 +172,9 @@ def create_dataloaders(dataset_dir: Path, batch_size: int = 32) -> Tuple[DataLoa
     logging.info(f"Created train dataset with {len(train_dataset)} samples")
     logging.info(f"Created validation dataset with {len(valid_dataset)} samples")
     
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    valid_loader = DataLoader(valid_dataset, batch_size=batch_size)
+    # The ONLY change is adding the collate_fn argument here
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=pad_collate)
+    valid_loader = DataLoader(valid_dataset, batch_size=batch_size, collate_fn=pad_collate)
     
     return train_loader, valid_loader
 

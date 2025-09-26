@@ -19,6 +19,7 @@ def setup_project_directories():
         "predictive_models_path": work_dir / "predictive_models",
         "plotting_path": work_dir / "plots",
         "json_path": work_dir / "json_data",
+        "evaluation_path": work_dir / "evaluation",
     }
 
     # Create each directory if it doesn't exist
