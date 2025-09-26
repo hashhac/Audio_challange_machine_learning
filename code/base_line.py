@@ -1,134 +1,139 @@
+# base_line.py
+
+import sys
+from pathlib import Path
 import torch
 import numpy as np
-from pathlib import Path
-import pandas as pd
 from tqdm import tqdm
 import logging
 import soundfile as sf
-path_to_baseline_code = Path(r"Audio_challange_machine_learning\code\audio_files\16981327\clarity\recipes\cad_icassp_2026\baseline")
-# Corrected imports from pyclarity
+
+# --- 1. SETUP: IMPORTS AND ROBUST PATHING ---
+
+# Add project root to path to allow importing from other folders
+def setup_paths():
+    """Setup all necessary paths to find our dataloader."""
+    current_file = Path(__file__).resolve()
+    project_root = current_file.parent.parent # Assumes this file is in .../code/
+    
+    # Add the 'code' directory to the path to find data_loading.py
+    code_path = project_root / "code"
+    if str(code_path) not in sys.path:
+        sys.path.append(str(code_path))
+        
+    logging.info(f"Project root is: {project_root}")
+    logging.info(f"Added to Python path: {code_path}")
+    
+    return project_root
+
+project_root = setup_paths()
+
+# Now we can safely import our custom modules
+from data_loading import create_dataloaders
 from clarity.enhancer.nalr import NALR
 from clarity.enhancer.compressor import Compressor
 from clarity.utils.audiogram import Audiogram
-# Make sure your dataloading script is in the same directory or accessible
-from data_loading import create_dataloaders 
 
-# Configure logging
+# Configure logging for clean output
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+
+# --- 2. THE REFINED MODEL CLASS ---
+
 class BaselineModel:
-    """Baseline enhancement model using PyClarity's NALR and Compressor."""
+    """
+    Baseline enhancement model using PyClarity's NALR and Compressor.
+    Refactored for clarity and robustness.
+    """
     def __init__(self, sample_rate=44100):
         self.sample_rate = sample_rate
-        # FIX: Provide the required 'nfir' and 'sample_rate' arguments
         self.nalr = NALR(nfir=220, sample_rate=self.sample_rate)
-        # The compressor is also a key part of a hearing aid model
         self.compressor = Compressor(
-            sample_rate=self.sample_rate,
-            # These are example parameters, you can tune them
-            attack=5e-3,
-            release=50e-3,
-            threshold=0.0,
-            ratio=1.0
+            sample_rate=self.sample_rate, attack=5e-3, release=50e-3,
+            threshold=0.0, ratio=1.0
         )
 
-    def process_audio(self, signal, audiogram_levels):
-        """Process an audio signal using NAL-R for a given audiogram."""
-        # Ensure audio is a NumPy array for pyclarity processing
-        if isinstance(signal, torch.Tensor):
-            # Squeeze to remove channel dimension if it's mono [1, N] -> [N]
-            signal = signal.squeeze().numpy()
+    def process_audio(self, signal_tensor: torch.Tensor, audiogram_levels: list) -> torch.Tensor:
+        """
+        Processes a stereo audio signal using the NAL-R prescription.
+        Handles each channel independently.
+        """
+        # Convert torch tensor to numpy array for pyclarity processing
+        signal_np = signal_tensor.cpu().numpy()
         
-        # The NALR enhancer expects the audiogram levels as input
-        # We need to create the 'audiogram' object pyclarity expects
-        
+        # Create the audiogram object needed by NAL-R
         audiogram = Audiogram(levels=audiogram_levels, frequencies=[250, 500, 1000, 2000, 4000, 6000])
-
-        # Apply NAL-R enhancement based on the listener's specific hearing loss
-        nalr_processed = self.nalr.process(signal=signal, audiogram=audiogram)
         
-        # Apply compression
-        compressed_signal, _, _ = self.compressor.process(nalr_processed)
-        
-        return torch.from_numpy(compressed_signal).float()
+        # Ensure we have a 2D array for stereo processing
+        if signal_np.ndim == 1:
+            signal_np = np.stack([signal_np, signal_np]) # Convert mono to stereo
 
-    def calculate_metrics(self, processed, target):
-        """Calculate a simple performance metric (e.g., correlation)."""
-        # Ensure tensors are flat for correlation
-        processed_flat = processed.flatten()
-        target_flat = target.flatten()
-        
-        # To avoid errors with silent signals, check the standard deviation
-        if torch.std(processed_flat) < 1e-6 or torch.std(target_flat) < 1e-6:
-            return {'correlation': 0.0}
+        # Create an empty array to store the processed channels
+        processed_channels = np.zeros_like(signal_np)
 
-        correlation = torch.corrcoef(
-            torch.stack([processed_flat, target_flat])
-        )[0, 1]
-        
-        return {'correlation': correlation.item()}
+        # Process each channel of the stereo signal independently
+        for i in range(signal_np.shape[0]):
+            nalr_processed = self.nalr.process(signal=signal_np[i, :], audiogram=audiogram)
+            compressed_signal, _, _ = self.compressor.process(nalr_processed)
+            processed_channels[i, :] = compressed_signal
+            
+        return torch.from_numpy(processed_channels).float()
 
-def evaluate_baseline(data_dir: Path, output_dir: Path, batch_size: int = 4):
-    """Evaluate the baseline enhancement model AND SAVE THE OUTPUT."""
+
+# --- 3. THE MAIN "WORKER" FUNCTION ---
+
+def enhance_and_save_dataset(dataloader: DataLoader, output_dir: Path):
+    """
+    Loops through a dataloader, enhances each audio file using the
+    BaselineModel, and saves the output to a specified directory.
+    """
     model = BaselineModel()
-    _, valid_loader = create_dataloaders(data_dir, batch_size=batch_size) # Ensure you have a collate_fn
+    output_dir.mkdir(parents=True, exist_ok=True)
     
-    # --- THIS IS THE FOLDER WE NEED TO CREATE ---
-    enhanced_audio_output_dir = output_dir / "my_enhanced_audio"
-    enhanced_audio_output_dir.mkdir(parents=True, exist_ok=True)
-    logging.info(f"Enhanced audio will be saved to: {enhanced_audio_output_dir}")
-    
-    results = []
-    
-    logging.info("Evaluating baseline model and SAVING enhanced audio...")
-    for batch in tqdm(valid_loader):
+    logging.info(f"Starting enhancement process. Output will be saved to: {output_dir}")
+
+    for batch in tqdm(dataloader, desc="Enhancing Audio Files"):
         signals = batch['signal']
-        unprocessed = batch['unprocessed']
-        metadata_list = batch['metadata']
+        # The dataloader batches metadata into a dictionary of lists.
+        # We access this dictionary directly.
+        metadata_batch = batch['metadata']
         
         for i in range(len(signals)):
-            metadata = metadata_list[i]
-            audiogram_levels = metadata['audiogram_levels_l']
-            
-            # This is your enhancement step
-            processed_signal_tensor = model.process_audio(signals[i], audiogram_levels)
-            
-            # --- ADD THIS CODE TO SAVE THE FILE ---
-            signal_id = metadata['signal']
-            output_filename = enhanced_audio_output_dir / f"{signal_id}.wav"
-            
-            # Convert tensor to numpy array for saving
-            # The .T transposes the data to the shape soundfile expects (samples, channels)
-            processed_signal_numpy = processed_signal_tensor.cpu().numpy().T
-            
-            # Save the processed audio as a WAV file
-            sf.write(output_filename, processed_signal_numpy, model.sample_rate)
-            # ----------------------------------------
+            # --- THE KEYERROR FIX IS HERE ---
+            # Instead of trying to rebuild a 'metadata' dict for each item,
+            # we directly access the lists within the batched metadata.
+            current_signal_tensor = signals[i]
+            audiogram = metadata_batch['audiogram_levels_l'][i]
+            signal_id = metadata_batch['signal'][i]
+            # --------------------------------
 
-            # The rest of your script can continue as before
-            metrics = model.calculate_metrics(processed_signal_tensor, unprocessed[i])
-            results.append({
-                'signal_id': signal_id,
-                **metrics
-            })
-    
-    # Create results DataFrame and save
-    results_df = pd.DataFrame(results)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    results_df.to_csv(output_dir / 'enhancement_baseline_results.csv', index=False)
-    
-    logging.info("\nValidation Set Results:")
-    logging.info(f"Average correlation: {results_df['correlation'].mean():.3f}")
-    
-    return results_df
+            # Use the model to process the audio
+            processed_tensor = model.process_audio(current_signal_tensor, audiogram)
+            
+            # Define the output filename
+            output_filename = output_dir / f"{signal_id}.wav"
+            
+            # Convert tensor to numpy and save the .wav file
+            processed_numpy = processed_tensor.cpu().numpy().T
+            sf.write(output_filename, processed_numpy, model.sample_rate)
 
-if __name__ == "__main__":
-    # Setup paths
-    current_dir = Path(__file__).parent
-    # The data_dir should point to the directory containing 'cadenza_data'
-    data_dir = current_dir / "audio_files" / "16981327"
-    output_dir = current_dir / "results"
+
+# --- 4. A RUNNABLE EXAMPLE FOR TESTING ---
+# This block allows us to run this script directly to test the enhancement
+# process without needing the full run_experiment.py script.
+
+if __name__ == '__main__':
+    logging.info("--- Running baseline.py as a standalone script for testing ---")
     
-    logging.info("Starting baseline evaluation...")
-    results = evaluate_baseline(data_dir, output_dir)
-    logging.info("Evaluation complete. Results saved to enhancement_baseline_results.csv")
+    # Define the necessary paths starting from our robust project_root
+    cadenza_data_root = project_root / "code" / "audio_files" / "16981327" / "cadenza_data"
+    output_directory = project_root / "results" / "my_enhanced_audio_test"
+    
+    # Create a dataloader for the validation set
+    # We pass the PARENT of 'cadenza_data' to the function
+    _, valid_loader = create_dataloaders(cadenza_data_root.parent, batch_size=4)
+    
+    # Run the main enhancement function
+    enhance_and_save_dataset(valid_loader, output_directory)
+    
+    logging.info("--- Standalone test complete. Check the output folder. ---")

@@ -20,6 +20,8 @@ def setup_project_directories():
         "plotting_path": work_dir / "plots",
         "json_path": work_dir / "json_data",
         "evaluation_path": work_dir / "evaluation",
+        "results": work_dir / "results",
+        "my_enhanced_audio": work_dir / "results" / "my_enhanced_audio",
     }
 
     # Create each directory if it doesn't exist
