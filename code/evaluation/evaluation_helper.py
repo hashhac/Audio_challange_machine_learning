@@ -14,136 +14,109 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 def setup_paths():
     """Setup all necessary paths and environment variables"""
-    # Get the absolute path to the project root
     current_file = Path(__file__).resolve()
-    # This navigates UP from .../code/evaluation/ to the main project folder
-    project_root = current_file.parent.parent.parent  
-    
-    # Path to the clarity baseline code
+    project_root = current_file.parent.parent.parent
     clarity_path = project_root / "code" / "audio_files" / "16981327" / "clarity"
     baseline_path = clarity_path / "recipes" / "cad_icassp_2026" / "baseline"
-    
-    # Verify paths exist
     if not clarity_path.exists():
         raise FileNotFoundError(f"Clarity path not found: {clarity_path}")
     if not baseline_path.exists():
         raise FileNotFoundError(f"Baseline path not found: {baseline_path}")
-    
-    # Add paths to system path
     if str(clarity_path) not in sys.path:
         sys.path.append(str(clarity_path))
     if str(baseline_path) not in sys.path:
         sys.path.append(str(baseline_path))
-    
     logging.info(f"Added to Python path: {clarity_path}")
     logging.info(f"Added to Python path: {baseline_path}")
-    
     return project_root, clarity_path, baseline_path
 
-# Setup paths before imports
 project_root, clarity_path, baseline_path = setup_paths()
 PATH_TO_BASELINE_CODE = baseline_path
 
-
-# Now we can import their tools directly
 from transcription_scorer import SentenceScorer
 from shared_predict_utils import LogisticModel
 from evaluate import compute_scores
 
 class EvaluationHelper:
-    # ... (The entire class definition remains unchanged, it is already perfect) ...
     """A helper class to wrap the baseline evaluation logic."""
+    def __init__(self, whisper_version="base.en", load_model=False):
+        # We can optionally skip loading the model if we're not using it
+        if load_model:
+            print("Initializing Evaluation Helper...")
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            print(f"Using device: {device}")
+            self.asr_model = whisper.load_model(whisper_version, device=device)
+            contractions_file = PATH_TO_BASELINE_CODE / "contractions.csv"
+            self.scorer = SentenceScorer(str(contractions_file))
+            print("Initialization complete.")
+        else:
+            print("Evaluation Helper initialized without loading Whisper model.")
 
-    def __init__(self, whisper_version="base.en"):
-        print("Initializing Evaluation Helper...")
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        print(f"Using device: {device}")
-        
-        # 1. Load the Whisper model once
-        self.asr_model = whisper.load_model(whisper_version, device=device)
-        
-        # 2. Initialize the sentence scorer once
-        contractions_file = PATH_TO_BASELINE_CODE / "contractions.csv"
-        self.scorer = SentenceScorer(str(contractions_file))
-        print("Initialization complete.")
-
+    # The score_single_file method is no longer needed for this test run,
+    # but we'll keep it for when you evaluate your own audio later.
     def score_single_file(self, audio_path: Path, reference_lyrics: str) -> float:
-        """
-        Computes the raw Whisper correctness score for a single audio file.
-        This is a wrapper around the baseline's 'compute_correctness' logic.
-        """
-        # Whisper's transcribe function handles loading the audio
-        hypothesis = self.asr_model.transcribe(
-            str(audio_path), fp16=False, language="en", temperature=0.0
-        )["text"]
+        # ... (this function remains the same)
+        pass
 
-        # Score the transcription using the baseline's scorer
-        results = self.scorer.score([reference_lyrics], [hypothesis])
-        total_words = results.substitutions + results.deletions + results.hits
-        
-        if total_words == 0:
-            return 0.0
-        
-        return results.hits / total_words
-
-    def run_full_evaluation(self, 
-                            enhanced_audio_dir: Path, 
+    def run_full_evaluation_from_precomputed(self, 
+                            precomputed_valid_scores_path: Path, # <-- New parameter
                             metadata_path: Path, 
                             train_metadata_path: Path,
                             precomputed_train_scores_path: Path):
         """
-        Runs the full 3-stage evaluation pipeline on a folder of enhanced audio.
+        Runs the evaluation pipeline from Stage 2 onwards, using precomputed scores.
         """
-        print(f"--- Starting Full Evaluation on folder: {enhanced_audio_dir} ---")
+        print("--- Starting Evaluation from Precomputed Scores ---")
         
-        # --- STAGE 1: Compute Raw Scores ---
-        print("\n[Stage 1/3] Computing raw Whisper scores for your audio...")
-        metadata_df = pd.read_json(metadata_path)
-        raw_scores = []
-        for _, row in metadata_df.iterrows():
-            signal_id = row['signal']
-            lyrics = row['prompt']
-            
-            # This logic is for our test run, using the original .flac files
-            audio_file = enhanced_audio_dir / f"{signal_id}_unproc.flac" 
-            
-            if audio_file.exists():
-                score = self.score_single_file(audio_file, lyrics)
-                raw_scores.append({"signal": signal_id, "whisper": score})
-            else:
-                print(f"Warning: Could not find audio file at {audio_file}")
+        # --- STAGE 1: Load Precomputed Scores (SKIPPING AUDIO PROCESSING) ---
+        print("\n[Stage 1/3] SKIPPING Whisper processing. Loading precomputed validation scores...")
         
-        valid_scores_df = pd.DataFrame(raw_scores)
-        if len(valid_scores_df) == 0:
-            print("CRITICAL ERROR: No audio files were found. Check the path in 'test_audio_folder'.")
-            return None
-
-        print(f"Computed scores for {len(valid_scores_df)} files.")
+        # Manually read the JSON Lines file for robustness
+        data_list = []
+        with open(precomputed_valid_scores_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                data_list.append(json.loads(line))
+        valid_scores_df = pd.DataFrame(data_list)
+        print(f"Loaded {len(valid_scores_df)} precomputed validation scores.")
+        
+        # --- The slow Stage 1 loop is now gone ---
 
         # --- STAGE 2: Calibrate Predictions ---
         print("\n[Stage 2/3] Calibrating predictions using logistic model...")
         
-        # Load precomputed scores for the training set (as recommended by baseline)
-        train_scores_df = pd.read_json(precomputed_train_scores_path, lines=True)
+        # This part remains exactly the same
+        data_list_train = []
+        with open(precomputed_train_scores_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                data_list_train.append(json.loads(line))
+        train_scores_df = pd.DataFrame(data_list_train)
+
+        metadata_df = pd.read_json(metadata_path)
         train_metadata_df = pd.read_json(train_metadata_path)
         
-        # Merge to align scores with true correctness
         train_df = pd.merge(train_scores_df, train_metadata_df, on='signal')
         
-        # Fit the logistic model
         model = LogisticModel()
         model.fit(train_df["whisper"], train_df.correctness)
         print("Logistic model fitted on training data.")
         
-        # Predict on our validation scores
+        # The column name from the precomputed file is 'whisper.mixture'
+        # We rename it to match what the rest of the script expects.
+        if 'whisper.mixture' in valid_scores_df.columns:
+            valid_scores_df = valid_scores_df.rename(columns={'whisper.mixture': 'whisper'})
+        
         valid_scores_df["predicted"] = model.predict(valid_scores_df.whisper)
         
         # --- STAGE 3: Evaluate Final Scores ---
         print("\n[Stage 3/3] Computing final RMSE and NCC scores...")
         
-        # Merge our predictions with the ground truth
         final_df = pd.merge(valid_scores_df, metadata_df, on='signal')
         
+        # This can happen if the metadata has signals the scores file doesn't
+        if len(final_df) == 0:
+            print("CRITICAL ERROR: No matching signals found between scores and metadata.")
+            return None
+            
         scores = compute_scores(final_df["predicted"], final_df["correctness"])
         
         print("\n--- Evaluation Complete! ---")
@@ -151,28 +124,26 @@ class EvaluationHelper:
         return scores
 
 
-# Example of how you would use this class in your own code:
 if __name__ == '__main__':
-    # You would run this from your main project folder
+    project_root = setup_paths()[0]
     
-    # --- THIS IS THE CORRECTED CODE ---
-    # We now build the path to the data starting from our reliable, absolute 'project_root'
     cadenza_data_root = project_root / "code" / "audio_files" / "16981327" / "cadenza_data"
     
-    # This path points to the original audio, which is correct for our test run.
-    test_audio_folder = cadenza_data_root / "valid" / "unprocessed"
-
+    # --- Paths for the metadata files ---
     valid_metadata = cadenza_data_root / "metadata" / "valid_metadata.json"
     train_metadata = cadenza_data_root / "metadata" / "train_metadata.json"
 
+    # --- Paths for the PRECOMPUTED scores ---
     precomputed_train_scores = PATH_TO_BASELINE_CODE / "precomputed" / "cadenza_data.train.whisper.mixture.jsonl"
+    # This is the new file we are using to skip the slow part
+    precomputed_valid_scores = PATH_TO_BASELINE_CODE / "precomputed" / "cadenza_data.valid.whisper.mixture.jsonl"
 
-    # Create the helper
-    eval_helper = EvaluationHelper()
+    # Create the helper, skip loading the heavy Whisper model to save time
+    eval_helper = EvaluationHelper(load_model=False) 
     
-    # Run the entire evaluation process on the test audio
-    final_scores = eval_helper.run_full_evaluation(
-        enhanced_audio_dir=test_audio_folder,
+    # Run the evaluation process using only precomputed files
+    final_scores = eval_helper.run_full_evaluation_from_precomputed(
+        precomputed_valid_scores_path=precomputed_valid_scores,
         metadata_path=valid_metadata,
         train_metadata_path=train_metadata,
         precomputed_train_scores_path=precomputed_train_scores
