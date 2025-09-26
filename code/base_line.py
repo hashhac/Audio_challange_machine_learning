@@ -69,44 +69,47 @@ class BaselineModel:
         return {'correlation': correlation.item()}
 
 def evaluate_baseline(data_dir: Path, output_dir: Path, batch_size: int = 4):
-    """Evaluate the baseline enhancement model on the dataset."""
-    # Note: Using a smaller batch_size can help with memory issues
+    """Evaluate the baseline enhancement model AND SAVE THE OUTPUT."""
     model = BaselineModel()
-    # Your create_dataloaders will give you both train and validation loaders
-    _, valid_loader = create_dataloaders(data_dir, batch_size=batch_size)
+    _, valid_loader = create_dataloaders(data_dir, batch_size=batch_size) # Ensure you have a collate_fn
+    
+    # --- THIS IS THE FOLDER WE NEED TO CREATE ---
+    enhanced_audio_output_dir = output_dir / "my_enhanced_audio"
+    enhanced_audio_output_dir.mkdir(parents=True, exist_ok=True)
+    logging.info(f"Enhanced audio will be saved to: {enhanced_audio_output_dir}")
     
     results = []
     
-    logging.info("Evaluating baseline model on validation set...")
+    logging.info("Evaluating baseline model and SAVING enhanced audio...")
     for batch in tqdm(valid_loader):
-        signals = batch['signal'] # Now a padded tensor [batch, channels, length]
-        unprocessed = batch['unprocessed'] # Also a padded tensor
-        metadata_list = batch['metadata'] # This is a LIST of dictionaries
+        signals = batch['signal']
+        unprocessed = batch['unprocessed']
+        metadata_list = batch['metadata']
         
         for i in range(len(signals)):
-            # Get the metadata for the i-th item in the batch
             metadata = metadata_list[i]
+            audiogram_levels = metadata['audiogram_levels_l']
             
-            # Important: Get the original, unpadded length if needed for processing
-            # This is a good practice, though NALR might not need it.
-            # original_length = metadata['original_length'] # You would add this in your dataset __getitem__
+            # This is your enhancement step
+            processed_signal_tensor = model.process_audio(signals[i], audiogram_levels)
+            
+            # --- ADD THIS CODE TO SAVE THE FILE ---
+            signal_id = metadata['signal']
+            output_filename = enhanced_audio_output_dir / f"{signal_id}.wav"
+            
+            # Convert tensor to numpy array for saving
+            # The .T transposes the data to the shape soundfile expects (samples, channels)
+            processed_signal_numpy = processed_signal_tensor.cpu().numpy().T
+            
+            # Save the processed audio as a WAV file
+            sf.write(output_filename, processed_signal_numpy, model.sample_rate)
+            # ----------------------------------------
 
-            audiogram_levels = metadata['audiogram_levels_l'] # Access the dict directly
-            
-            # Select the i-th signal from the batch
-            current_signal = signals[i]
-            
-            # Process the audio
-            processed_signal = model.process_audio(current_signal, audiogram_levels)
-                
-            # Calculate metrics comparing the enhanced signal to the original unprocessed one
-            metrics = model.calculate_metrics(processed_signal, unprocessed[i])
-            
-            # Store results
+            # The rest of your script can continue as before
+            metrics = model.calculate_metrics(processed_signal_tensor, unprocessed[i])
             results.append({
-                'signal_id': metadata['signal'][i],
-                **metrics,
-                'hearing_loss': metadata['hearing_loss'][i]
+                'signal_id': signal_id,
+                **metrics
             })
     
     # Create results DataFrame and save

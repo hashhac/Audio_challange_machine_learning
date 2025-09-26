@@ -16,7 +16,8 @@ def setup_paths():
     """Setup all necessary paths and environment variables"""
     # Get the absolute path to the project root
     current_file = Path(__file__).resolve()
-    project_root = current_file.parent.parent.parent  # Go up three levels to reach project root
+    # This navigates UP from .../code/evaluation/ to the main project folder
+    project_root = current_file.parent.parent.parent  
     
     # Path to the clarity baseline code
     clarity_path = project_root / "code" / "audio_files" / "16981327" / "clarity"
@@ -50,6 +51,7 @@ from shared_predict_utils import LogisticModel
 from evaluate import compute_scores
 
 class EvaluationHelper:
+    # ... (The entire class definition remains unchanged, it is already perfect) ...
     """A helper class to wrap the baseline evaluation logic."""
 
     def __init__(self, whisper_version="base.en"):
@@ -101,15 +103,21 @@ class EvaluationHelper:
         for _, row in metadata_df.iterrows():
             signal_id = row['signal']
             lyrics = row['prompt']
-            audio_file = enhanced_audio_dir / f"{signal_id}.wav" # Assuming .wav format
+            
+            # This logic is for our test run, using the original .flac files
+            audio_file = enhanced_audio_dir / f"{signal_id}_unproc.flac" 
             
             if audio_file.exists():
                 score = self.score_single_file(audio_file, lyrics)
                 raw_scores.append({"signal": signal_id, "whisper": score})
             else:
-                print(f"Warning: Could not find enhanced audio for {signal_id}")
+                print(f"Warning: Could not find audio file at {audio_file}")
         
         valid_scores_df = pd.DataFrame(raw_scores)
+        if len(valid_scores_df) == 0:
+            print("CRITICAL ERROR: No audio files were found. Check the path in 'test_audio_folder'.")
+            return None
+
         print(f"Computed scores for {len(valid_scores_df)} files.")
 
         # --- STAGE 2: Calibrate Predictions ---
@@ -142,28 +150,29 @@ class EvaluationHelper:
         print(json.dumps(scores, indent=2))
         return scores
 
+
 # Example of how you would use this class in your own code:
 if __name__ == '__main__':
     # You would run this from your main project folder
     
-    # Define the paths based on your project structure
-    my_enhanced_audio_folder = Path("results/my_enhanced_audio")
-    cadenza_data_root = Path("Audio_challange_machine_learning/code/audio_files/16981327/cadenza_data"
-)
+    # --- THIS IS THE CORRECTED CODE ---
+    # We now build the path to the data starting from our reliable, absolute 'project_root'
+    cadenza_data_root = project_root / "code" / "audio_files" / "16981327" / "cadenza_data"
     
-    valid_metadata = cadenza_data_root / "metadata/valid_metadata.json"
-    train_metadata = cadenza_data_root / "metadata/train_metadata.json"
+    # This path points to the original audio, which is correct for our test run.
+    test_audio_folder = cadenza_data_root / "valid" / "unprocessed"
 
-    
-    # The baseline provides pre-computed scores so you don't have to run whisper on the whole training set
-    precomputed_train_scores = PATH_TO_BASELINE_CODE / "precomputed/cadenza_data.train.whisper.mixture.jsonl"
+    valid_metadata = cadenza_data_root / "metadata" / "valid_metadata.json"
+    train_metadata = cadenza_data_root / "metadata" / "train_metadata.json"
+
+    precomputed_train_scores = PATH_TO_BASELINE_CODE / "precomputed" / "cadenza_data.train.whisper.mixture.jsonl"
 
     # Create the helper
     eval_helper = EvaluationHelper()
     
-    # Run the entire evaluation process on your enhanced audio
+    # Run the entire evaluation process on the test audio
     final_scores = eval_helper.run_full_evaluation(
-        enhanced_audio_dir=my_enhanced_audio_folder,
+        enhanced_audio_dir=test_audio_folder,
         metadata_path=valid_metadata,
         train_metadata_path=train_metadata,
         precomputed_train_scores_path=precomputed_train_scores
