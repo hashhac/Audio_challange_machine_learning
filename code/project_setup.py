@@ -22,7 +22,8 @@ def setup_project_directories():
         "evaluation_path": work_dir / "evaluation",
         "results": work_dir / "results",
         "my_enhanced_audio": work_dir / "results" / "my_enhanced_audio",
-        "models": work_dir / "models"
+        "models": work_dir / "models",
+        "testing": work_dir / "testing"
     }
 
     # Create each directory if it doesn't exist
