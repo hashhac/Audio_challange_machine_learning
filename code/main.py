@@ -58,13 +58,8 @@ def run_full_experiment():
     # and save the output audio files.
     
     logging.info("--- Starting Phase 1: Audio Enhancement ---")
-    
-    # Initialize your hearing aid model
     model = NLR1_Model()
-    
-    # Create a dataloader for the validation set (the audio we need to process)
-    # We pass the parent of 'cadenza_data' to your create_dataloaders function
-    _, valid_loader = create_dataloaders(cadenza_data_root.parent, batch_size=4) # Smaller batch size for processing
+    _, valid_loader = create_dataloaders(cadenza_data_root.parent, batch_size=4)
 
     # Loop through the validation data, process it, and save it
     for batch in tqdm(valid_loader, desc="Enhancing Audio Files"):
@@ -73,23 +68,22 @@ def run_full_experiment():
 
         for i in range(len(signals)):
             metadata = metadata_list[i]
-
-            # The model API is generic: it accepts the raw signal and an optional
-            # audiogram_levels list or a metadata dict. We prefer passing metadata
-            # so models can decide how to extract needed information.
-            processed_signal_tensor = model.process_audio(signals[i], metadata=metadata)
-            
-            # Define the output filename based on the signal ID
             signal_id = metadata['signal']
+
+            # --- THIS IS THE CORRECTED LOGIC ---
+            # We now use the exact same, proven method as your test script.
+            # 1. Get the hearing loss label from the raw metadata.
+            hearing_loss_label = metadata.get('hearing_loss', "No Loss")
+            
+            # 2. Look up the correct audiogram from the model's default dictionary.
+            audiogram = DEFAULT_AUDIOGRAMS.get(hearing_loss_label, DEFAULT_AUDIOGRAMS["No Loss"])
+
+            # 3. Call the model with the DIRECT list of numbers.
+            processed_signal_tensor = model.process_audio(signals[i], audiogram_levels=audiogram)
+            # ------------------------------------
+            
             output_filename = enhanced_audio_output_dir / f"{signal_id}.wav"
-            
-            # Convert the PyTorch tensor to a NumPy array that soundfile can use
-            # .cpu() moves data from GPU to CPU (if applicable)
-            # .numpy() converts to NumPy format
-            # .T transposes the shape from (channels, samples) to (samples, channels)
             processed_signal_numpy = processed_signal_tensor.cpu().numpy().T
-            
-            # Save the processed audio as a .wav file
             sf.write(output_filename, processed_signal_numpy, model.sample_rate)
 
     logging.info(f"--- Phase 1 Complete: All enhanced audio saved. ---")

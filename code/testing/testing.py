@@ -61,6 +61,7 @@ def sample_pairs(
     return out_dir
 
 if __name__ == "__main__":
-    project_root = Path(__file__).resolve().parent.parent
+    # Resolve repository root (testing.py is in code/testing/ => parents[2] -> repo root)
+    project_root = Path(__file__).resolve().parents[2]
     # change n_pairs if you want a different count
     sample_pairs(project_root, n_pairs=5)

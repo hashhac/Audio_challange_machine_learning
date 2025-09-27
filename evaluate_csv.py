@@ -64,6 +64,12 @@ def compare_submission_files(directory_to_scan: Path, ground_truth_metadata_path
     ground_truth_df = pd.read_json(ground_truth_metadata_path)
     # Rename 'signal' to match the submission file's 'signal_ID' for easy merging
     ground_truth_df.rename(columns={'signal': 'signal_ID'}, inplace=True)
+
+    # --- THE CRITICAL FIX IS HERE ---
+    # Convert the 'correctness' column from the 0-1 scale to the 0-100 scale
+    if 'correctness' in ground_truth_df.columns:
+        ground_truth_df['correctness'] = ground_truth_df['correctness'] * 100
+        logging.info("Ground truth 'correctness' scores scaled to 0-100 range.")
     
     # --- LOOP THROUGH AND SCORE EACH FILE ---
     for csv_path in submission_files:
