@@ -4,13 +4,24 @@ from pathlib import Path
 from tqdm import tqdm
 import soundfile as sf
 import logging
+import sys
+
+# Ensure the project's `code/` directory is on sys.path so we can import modules
+# like `models.hearing_aid_models` and `evaluation.evaluation_helper` without
+# requiring `code` to be a package. This makes imports reliable when running
+# the script from the project root or other working directories.
+project_root = Path(__file__).resolve().parent
+# `main.py` lives in the `code/` folder; the project root is its parent
+project_root = project_root.parent
+code_path = project_root / "code"
+if str(code_path) not in sys.path:
+    sys.path.insert(0, str(code_path))
 
 # --- 1. IMPORT YOUR CUSTOM-BUILT MODULES ---
-# We are now importing the two major components you have built and tested:
-# - The model that ENHANCES the audio (from base_line.py)
-# - The helper that EVALUATES the audio (from evaluation_helper.py)
-from code.models.hearing_aid_models import NLR1_Model, create_dataloaders
-from code.evaluation.evaluation_helper import EvaluationHelper, setup_paths
+# Import the model and evaluation helpers from inside the code/ tree
+from models.hearing_aid_models import NLR1_Model, enhance_and_save_dataset
+from data_loading import create_dataloaders
+from evaluation.evaluation_helper import EvaluationHelper, setup_paths
 
 # Configure logging for a clean output
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -59,13 +70,14 @@ def run_full_experiment():
     for batch in tqdm(valid_loader, desc="Enhancing Audio Files"):
         signals = batch['signal']
         metadata_list = batch['metadata']
-        
+
         for i in range(len(signals)):
             metadata = metadata_list[i]
-            audiogram_levels = metadata['audiogram_levels_l']
-            
-            # Use your model to process the audio in memory
-            processed_signal_tensor = model.process_audio(signals[i], audiogram_levels)
+
+            # The model API is generic: it accepts the raw signal and an optional
+            # audiogram_levels list or a metadata dict. We prefer passing metadata
+            # so models can decide how to extract needed information.
+            processed_signal_tensor = model.process_audio(signals[i], metadata=metadata)
             
             # Define the output filename based on the signal ID
             signal_id = metadata['signal']

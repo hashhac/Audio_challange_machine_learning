@@ -41,7 +41,11 @@ class NLR1_Model:
     """
     Our first baseline enhancement model (NLR1), corrected to produce non-silent audio.
     """
-    def __init__(self, sample_rate=44100):
+    def __init__(self, sample_rate=44100, audiogram_levels: list = None):
+        """
+        sample_rate: sample rate used by NALR/Compressor
+        audiogram_levels: optional default audiogram levels used when per-file metadata lacks audiogram info
+        """
         self.sample_rate = sample_rate
         # NALR expects (nfir, sample_rate)
         self.nalr = NALR(nfir=220, sample_rate=self.sample_rate)
@@ -56,12 +60,46 @@ class NLR1_Model:
             makeup_gain=1.0,
         )
 
-    def process_audio(self, signal_tensor: torch.Tensor, audiogram_levels: list) -> torch.Tensor:
+        # Use provided audiogram or the default "No Loss"
+        if audiogram_levels is None:
+            self.default_audiogram = DEFAULT_AUDIOGRAMS["No Loss"]
+        else:
+            self.default_audiogram = audiogram_levels
+
+    def _extract_audiogram_from_metadata(self, metadata: dict):
+        """Return audiogram levels list from metadata with sensible fallbacks."""
+        if metadata is None:
+            return self.default_audiogram
+        # Common variants we may encounter
+        for key in ("audiogram_levels_l", "audiogram_l", "audiogram", "hearing_loss"):
+            if key in metadata:
+                val = metadata[key]
+                # If hearing_loss label like 'Mild' map to default table
+                if key == "hearing_loss":
+                    return DEFAULT_AUDIOGRAMS.get(val, self.default_audiogram)
+                # If it's already a list or tuple of numbers
+                if isinstance(val, (list, tuple)):
+                    return list(val)
+                # If it's a string representation try to parse numbers
+                if isinstance(val, str):
+                    try:
+                        parts = [float(x) for x in val.replace(',', ' ').split()]
+                        if parts:
+                            return parts
+                    except Exception:
+                        pass
+        return self.default_audiogram
+
+    def process_audio(self, signal_tensor: torch.Tensor, audiogram_levels: list = None, metadata: dict = None) -> torch.Tensor:
         signal_np = signal_tensor.cpu().numpy()
         # Ensure shape is (channels, samples)
         if signal_np.ndim == 1:
             signal_np = np.stack([signal_np, signal_np])
         assert signal_np.ndim == 2, "signal must be (channels, samples)"
+
+        # Determine audiogram: parameter takes precedence, then metadata, then instance default
+        if audiogram_levels is None:
+            audiogram_levels = self._extract_audiogram_from_metadata(metadata)
 
         audiogram = Audiogram(levels=audiogram_levels, frequencies=[250, 500, 1000, 2000, 4000, 6000])
 
