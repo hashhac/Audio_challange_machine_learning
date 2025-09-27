@@ -12,5 +12,4 @@ I have donwloaded the clarity challange audio dataset and saved it in audiofiles
 ```Audio_challange_machine_learning\code\audio_files\16981327``` I have then run the following commands to open the 2 tar files ```tar -xvzf cadenza_clip1_data.train.v1.0.tar.gz  # For training data
 tar -xvzf cadenza_clip1_data.valid.v1.0.tar.gz # For validation data````
 
-finally inside ```Audio_challange_machine_learning\code\audio_files\16981327\clarity``` is the command of ```\Audio_challange_machine_learning\code\audio_files\16981327> git clone https://github.com/claritychallenge/clarity.git ``` which means i can now access the baseline models and evalutations with the path path_to_baseline_code = Path(r"Audio_challange_machine_learning\code\audio_files\16981327\clarity\recipes\cad_icassp_2026\baseline")
-which gives access to the 2 provided baseline methods and the way they layout ranking audio data. 
+This github has been changed to include the full clone of pyclarity version 0.80.0 which is why the files here use functions from that which have been provided for ranking and for hearing aid simulation at this point who knows what else. But it is all here ```"Audio_challange_machine_learning\code\audio_files\16981327\clarity"``` where the extracted data from the cadanza data goes ```"Audio_challange_machine_learning\code\audio_files\16981327\cadenza_data"```
