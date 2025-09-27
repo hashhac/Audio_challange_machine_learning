@@ -9,7 +9,7 @@ import logging
 # We are now importing the two major components you have built and tested:
 # - The model that ENHANCES the audio (from base_line.py)
 # - The helper that EVALUATES the audio (from evaluation_helper.py)
-from code.base_line import BaselineModel, create_dataloaders
+from code.models.hearing_aid_models import NLR1_Model, create_dataloaders
 from code.evaluation.evaluation_helper import EvaluationHelper, setup_paths
 
 # Configure logging for a clean output
@@ -49,7 +49,7 @@ def run_full_experiment():
     logging.info("--- Starting Phase 1: Audio Enhancement ---")
     
     # Initialize your hearing aid model
-    model = BaselineModel()
+    model = NLR1_Model()
     
     # Create a dataloader for the validation set (the audio we need to process)
     # We pass the parent of 'cadenza_data' to your create_dataloaders function
