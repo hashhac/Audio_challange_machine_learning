@@ -49,14 +49,6 @@ class NLR1_Model:
         self.sample_rate = sample_rate
         # NALR expects (nfir, sample_rate)
         self.nalr = NALR(nfir=220, sample_rate=self.sample_rate)
-        # expose the default audiogram presets on the nalr instance so other code can access them
-        # assign directly so any assignment failure raises (do not fail silently)
-        self.nalr.default_audiograms = {
-            "No Loss": [ -5., -5., -5., -5., -5., -5.],
-            "Mild": [ 20., 25., 30., 40., 50., 55.],
-            "Moderate": [ 45., 50., 60., 65., 70., 75.],
-            "Moderately Severe": [ 65., 70., 75., 80., 85., 90.],
-        }
         # Compressor expects fs (Hz) and attack/release in milliseconds.
         # Set attenuation to a reasonable value (0.5) instead of tiny 0.0001 to avoid muting.
         self.compressor = Compressor(
@@ -229,6 +221,5 @@ if __name__ == '__main__':
     # -------------------------------------------
 
     enhance_and_save_dataset(test_loader, output_directory, debug_pairs=10)
-    # single informational print for where test files were saved
-    print(f"Enhanced audio will be saved to: {output_directory}")
+
     logging.info(f"--- Fast test complete. Check the 10 audio files in: {output_directory} ---")
