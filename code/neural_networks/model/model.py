@@ -1041,6 +1041,7 @@ def main():
             module = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(module)
             CadenzaDataset = getattr(module, 'CadenzaDataset')
+            pad_collate = getattr(module, 'pad_collate', None)
             full_dataset = CadenzaDataset(cadenza_dir)
             if len(full_dataset) == 0:
                 if RANK == 0:
@@ -1051,8 +1052,10 @@ def main():
             val_size = len(full_dataset) - train_size
             train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
             train_sampler = DistributedSampler(train_dataset, shuffle=True) if WORLD_SIZE > 1 else None
-            train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=(train_sampler is None), sampler=train_sampler, num_workers=0, pin_memory=True)
-            val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0)
+            # Use the provided pad_collate if available so variable-length audio is padded
+            collate_fn = pad_collate if 'pad_collate' in locals() and pad_collate is not None else None
+            train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=(train_sampler is None), sampler=train_sampler, num_workers=0, pin_memory=True, collate_fn=collate_fn)
+            val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0, collate_fn=collate_fn)
             if RANK == 0:
                 print(f"Using Cadenza dataset with {len(full_dataset)} audio files; train batches: {len(train_dataloader)}")
     except Exception as e:
