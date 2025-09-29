@@ -42,35 +42,64 @@ class Initialise:
         ckpt = torch.load(self.checkpoint_path, map_location=self.device)
         # ckpt may be a dict with 'model_state' or 'state_dict' or the model object
         if isinstance(ckpt, dict):
-            # common keys: 'model', 'model_state_dict', 'state_dict'
-            if 'model' in ckpt and isinstance(ckpt['model'], torch.nn.Module):
-                self.model = ckpt['model']
-            elif 'model_state_dict' in ckpt or 'state_dict' in ckpt:
-                state = ckpt.get('model_state_dict', ckpt.get('state_dict'))
-                if self.model_factory is None:
-                    raise ValueError('Checkpoint contains state_dict but no model_factory provided to build the model instance.')
-                self.model = self.model_factory()
-                self.model.load_state_dict(state)
-            else:
-                # fallback: maybe the dict IS the state_dict
-                if all(isinstance(v, torch.Tensor) for v in ckpt.values()):
-                    if self.model_factory is None:
-                        raise ValueError('Checkpoint appears to be a state_dict but no model_factory provided.')
-                    self.model = self.model_factory()
-                    self.model.load_state_dict(ckpt)
-                else:
-                    # try for nested 'net' or 'model' keys
-                    for key in ('net', 'module', 'network'):
-                        if key in ckpt and isinstance(ckpt[key], torch.nn.Module):
-                            self.model = ckpt[key]
-                            break
+            # 1) If checkpoint saved the full model object under common keys
+            for key in ('model', 'net', 'network', 'module'):
+                if key in ckpt and isinstance(ckpt[key], torch.nn.Module):
+                    self.model = ckpt[key]
+                    break
+
+            # 2) If checkpoint contains explicit state_dict keys
+            if self.model is None:
+                for state_key in ('model_state_dict', 'state_dict', 'model_state', 'state'):
+                    if state_key in ckpt and isinstance(ckpt[state_key], dict):
+                        state = ckpt[state_key]
+                        if self.model_factory is None:
+                            raise ValueError(f"Checkpoint contains '{state_key}' but no model_factory provided to build the model instance.")
+                        self.model = self.model_factory()
+                        self.model.load_state_dict(state)
+                        break
+
+            # 3) Top-level dict might itself be a state_dict (all values are tensors)
+            if self.model is None:
+                try:
+                    if all(isinstance(v, torch.Tensor) for v in ckpt.values()):
+                        if self.model_factory is None:
+                            raise ValueError('Checkpoint appears to be a state_dict but no model_factory provided.')
+                        self.model = self.model_factory()
+                        self.model.load_state_dict(ckpt)
+                except Exception:
+                    # some ckpt structures are not pure mapping types
+                    pass
+
+            # 4) Sometimes state_dict is nested under another dict value (search shallowly)
+            if self.model is None:
+                for k, v in ckpt.items():
+                    if isinstance(v, dict) and all(isinstance(x, torch.Tensor) for x in v.values()):
+                        if self.model_factory is None:
+                            raise ValueError(f"Found a nested state_dict under key '{k}' but no model_factory provided to build the model instance.")
+                        self.model = self.model_factory()
+                        self.model.load_state_dict(v)
+                        break
         else:
             # loaded object could be a full model
             if isinstance(ckpt, torch.nn.Module):
                 self.model = ckpt
 
         if self.model is None:
-            raise RuntimeError('Unable to locate a model object or state_dict in the checkpoint.\nProvide a model_factory to build the architecture if this checkpoint only contains state_dict.')
+            # Provide a helpful diagnostic listing top-level keys where possible
+            diag = ''
+            try:
+                if isinstance(ckpt, dict):
+                    diag = f"Top-level keys: {list(ckpt.keys())}"
+                else:
+                    diag = f"Checkpoint type: {type(ckpt)}"
+            except Exception:
+                diag = 'Unable to enumerate checkpoint contents.'
+            raise RuntimeError(
+                'Unable to locate a model object or state_dict in the checkpoint.\n'
+                'If the checkpoint contains only a state_dict, provide a `model_factory` callable to Initialise so the loader can instantiate the model and load the state_dict.\n'
+                f'{diag}'
+            )
 
         # move to device and eval
         self.model.to(self.device)
@@ -204,6 +233,22 @@ if __name__ == '__main__':
     ckpt = base / 'model.pt'
     out = base.parent.parent.parent / 'results' / 'model1_init_test'
     from torch.utils.data import DataLoader
+
+    # Diagnostic: inspect checkpoint contents before attempting to load
+    try:
+        import torch as _torch
+        _ck = _torch.load(ckpt, map_location='cpu')
+        if isinstance(_ck, dict):
+            print('Checkpoint is a dict. Top-level keys:', list(_ck.keys()))
+            # show any nested dict keys that look like state_dicts
+            for k, v in _ck.items():
+                if isinstance(v, dict):
+                    if all(isinstance(x, _torch.Tensor) for x in v.values()):
+                        print(f"Nested state_dict found under key: '{k}' (looks like state_dict)")
+        else:
+            print('Checkpoint type:', type(_ck))
+    except Exception as _e:
+        print('Failed to inspect checkpoint:', _e)
 
     # If code package has data_loading available, try to use it
     try:
