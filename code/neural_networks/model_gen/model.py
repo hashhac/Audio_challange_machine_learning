@@ -1064,14 +1064,28 @@ def main():
         cleanup_ddp()
         return
 
-    # Split manually for simplicity
-    train_size = int(0.95 * len(full_dataset))
-    val_size = len(full_dataset) - train_size
-    train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
-    
-    train_sampler = DistributedSampler(train_dataset, shuffle=True) if WORLD_SIZE > 1 else None
-    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=(train_sampler is None), sampler=train_sampler, num_workers=0, pin_memory=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0) # this may need to be adjusted based on your system and speed requirements
+    # Ensure dataloaders exist. If they weren't created above (e.g. when using the fallback CadenzaDataset),
+    # create them here using pad_collate when available so variable-length audio is handled correctly.
+    if 'train_dataloader' not in locals() or train_dataloader is None:
+        if full_dataset is None:
+            if RANK == 0:
+                print("Error: full_dataset is not available to create dataloaders.")
+            cleanup_ddp()
+            return
+
+        train_size = int(0.95 * len(full_dataset))
+        val_size = len(full_dataset) - train_size
+        train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
+        train_sampler = DistributedSampler(train_dataset, shuffle=True) if WORLD_SIZE > 1 else None
+
+        collate_fn = None
+        if 'pad_collate' in locals() and pad_collate is not None:
+            collate_fn = pad_collate
+
+        train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=(train_sampler is None), sampler=train_sampler, num_workers=0, pin_memory=True, collate_fn=collate_fn)
+        val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0, collate_fn=collate_fn)
+        if RANK == 0:
+            print(f"Using Cadenza dataset with {len(full_dataset)} audio files; train batches: {len(train_dataloader)}")
 
     writer = SummaryWriter(log_dir=LOG_DIR / f"run_{time.strftime('%Y%m%d-%H%M%S')}") if RANK == 0 else None
 
