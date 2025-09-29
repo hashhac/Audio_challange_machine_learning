@@ -53,6 +53,16 @@ except ImportError:
     print("Error: The 'encodec' package is not installed. Please install it using: pip install -U encodec")
     exit()
 
+# Try to import the project's Cadenza dataloader so training uses the same dataset as the baseline
+try:
+    from code.data_loading import create_dataloaders
+except Exception:
+    try:
+        # fallback relative import when executing as a package
+        from ...data_loading import create_dataloaders
+    except Exception:
+        create_dataloaders = None
+
 # --- Distributed Training Imports ---
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -99,12 +109,12 @@ AUDIO_NORMALIZATION = True    # Normalize audio levels for consistency
 
 # --- Base Configuration ---
 BATCH_SIZE = 16 # Reduced batch size for faster iterations and more gradient updates
-BLOCK_SIZE = 512 # Shorter sequences = faster training, still ~6-8 seconds of audio
+BLOCK_SIZE = 256 # Shorter sequences = faster training, still ~6-8 seconds of audio
 N_EMBED = 64#320 # Slightly larger embedding for better capacity
 N_LAYER = 8   # Increase layers for better model capacity (should be even for U-Net)
 N_HEAD = 4 # More attention heads for better representation
-MAX_ITERS = 25001 # More iterations to compensate for smaller batches
-CHECKPOINT_INTERVAL = 1000 # Save checkpoints much more frequently to avoid loss
+MAX_ITERS = 2501 # More iterations to compensate for smaller batches
+CHECKPOINT_INTERVAL = 50 # Save checkpoints much more frequently to avoid loss
 EVAL_INTERVAL = 100 # More frequent evaluation to monitor progress
 LEARNING_RATE = 0.24/N_EMBED # Higher fixed learning rate for faster convergence
 MIN_LEARNING_RATE = 0.0666/N_EMBED  # Minimum learning rate for cosine decay
@@ -184,7 +194,11 @@ encodec_model = None
 def load_and_prep_data():
     global full_data_tensor, vocab_size, MASK_TOKEN_ID, encodec_model
     encodec_model = EncodecModel.encodec_model_24khz().to(DEVICE)
-    encodec_model.set_target_bandwidth(6.0) # question also base niose might be needed for smoother audio transitionsa and long term fidelity audio segments without drift
+    # Use configured ENCODEC_BANDWIDTH for better audio quality; fall back to 12 kbps if unsupported
+    try:
+        encodec_model.set_target_bandwidth(ENCODEC_BANDWIDTH)
+    except Exception:
+        encodec_model.set_target_bandwidth(12.0)
     encodec_model.eval()
     codebook_size = encodec_model.quantizer.bins
     vocab_size = codebook_size + 1
@@ -218,6 +232,53 @@ def load_and_prep_data():
     if RANK == 0: print("Loading tokenized data from cache...")
     full_data_tensor = torch.load(DATA_CACHE_PATH, map_location='cpu')
     if RANK == 0: print(f"Data loaded. Tensor shape: {full_data_tensor.shape}")
+
+    # If available, create Cadenza dataloaders so training uses the repo dataset and metadata
+    try:
+        if create_dataloaders is not None:
+            data_root = Path(os.environ.get('CADENZA_DATA', 'code/audio_files/16981327'))
+            train_loader, valid_loader = create_dataloaders(data_root, batch_size=BATCH_SIZE)
+            globals()['train_loader'] = train_loader
+            globals()['valid_loader'] = valid_loader
+            if RANK == 0:
+                print(f"Cadenza dataloaders created. Train batches: {len(train_loader)}, Valid batches: {len(valid_loader)}")
+        else:
+            if RANK == 0:
+                print("create_dataloaders import not available; skipping Cadenza loader creation")
+    except Exception as e:
+        if RANK == 0:
+            print(f"Warning: failed to create Cadenza dataloaders automatically: {e}")
+
+
+def hearing_loss_to_tensor(metadata_list, device=None):
+    """Convert a list of metadata dicts (from CadenzaDataset) into a tensor conditioning vector.
+
+    The mapping is simple and small by design so the model can condition on hearing loss type.
+    Returns a float tensor of shape (batch,) with values in [0,1].
+    Mapping:
+      'No Loss' -> 0.0
+      'Mild'    -> 0.33
+      'Moderate'-> 0.66
+      'Severe'  -> 1.0
+    Unknown entries map to 0.0
+    """
+    mapping = {
+        'No Loss': 0.0,
+        'Mild': 0.33,
+        'Moderate': 0.66,
+        'Severe': 1.0
+    }
+    vals = []
+    for md in metadata_list:
+        try:
+            hl = md.get('hearing_loss') if isinstance(md, dict) else None
+            vals.append(mapping.get(hl, 0.0))
+        except Exception:
+            vals.append(0.0)
+    tensor = torch.tensor(vals, dtype=torch.float32)
+    if device is not None:
+        tensor = tensor.to(device)
+    return tensor
 
 # --- NEW: VCTK Dataset Handler ---
 class VCTKPairDataset(Dataset):
@@ -263,11 +324,16 @@ class VCTKPairDataset(Dataset):
         """Lazy initialization of encodec model for worker processes"""
         if self._encodec_model is None:
             self._encodec_model = EncodecModel.encodec_model_24khz()
-            self._encodec_model.set_target_bandwidth(6.0)
+            try:
+                self._encodec_model.set_target_bandwidth(ENCODEC_BANDWIDTH)
+            except Exception:
+                self._encodec_model.set_target_bandwidth(12.0)
             self._encodec_model.eval()
-            # Move to appropriate device
-            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-            self._encodec_model = self._encodec_model.to(device)
+            # Move to the same DEVICE used by the training script
+            try:
+                self._encodec_model = self._encodec_model.to(DEVICE)
+            except Exception:
+                self._encodec_model = self._encodec_model.to(torch.device('cpu'))
         return self._encodec_model
 
     def __len__(self):
@@ -919,57 +985,107 @@ def main():
             print("  - DC offset removal")
             print("  - Soft compression post-processing")
 
-    # --- NEW: Use VCTK Dataset ---
-    if not DATASET_PATH.exists():
+    # --- Simplified: Always use Cadenza dataset ---
+    # Resolve default path relative to the project root so scripts run from anywhere
+    project_root = Path(__file__).resolve().parents[3]
+
+    cad_env = os.environ.get('CADENZA_DATA', None)
+    if cad_env:
+        base_dir = Path(cad_env)
+    else:
+        # default repo location (parent of cadenza_data)
+        base_dir = project_root / 'code' / 'audio_files' / '16981327'
+
+    # Determine actual cadenza directory: either base_dir if it *is* cadenza_data, or base_dir/cadenza_data
+    if base_dir.name == 'cadenza_data':
+        cadenza_dir = base_dir
+    else:
+        cadenza_dir = base_dir / 'cadenza_data'
+
+    if RANK == 0:
+        print(f"Cadenza dataset resolved to: {cadenza_dir.resolve()}")
+
+    if not cadenza_dir.exists():
         if RANK == 0:
-            print(f"Error: VCTK dataset not found at {DATASET_PATH}")
-            print("Please download it from https://datashare.ed.ac.uk/handle/10283/3443")
-            print("Alternatively, modify DATASET_PATH to point to your VCTK dataset location")
+            print(f"Error: Cadenza dataset not found at {cadenza_dir.resolve()}")
+            print("Set CADENZA_DATA to the parent folder or to the 'cadenza_data' folder. Example: ")
+            print(f"  CADENZA_DATA={project_root / 'code' / 'audio_files' / '16981327'}")
         cleanup_ddp()
         return
 
+    # Instantiate dataset/loaders using repository helper if available
     try:
-        full_dataset = VCTKPairDataset(root_path=DATASET_PATH, block_size=BLOCK_SIZE)
-        if len(full_dataset) == 0:
+        if create_dataloaders is not None:
+            # create_dataloaders expects the parent directory (it appends 'cadenza_data' internally)
+            parent_for_loader = cadenza_dir.parent
+            train_loader, val_loader = create_dataloaders(parent_for_loader, batch_size=BATCH_SIZE)
+            train_dataloader = train_loader
+            val_dataloader = val_loader
+            full_dataset = None
             if RANK == 0:
-                print(f"Error: No valid audio files found in {DATASET_PATH}")
-                print("Please check that the dataset structure is correct")
-            cleanup_ddp()
-            return
-        
-        # Additional validation for dataset
-        if len(full_dataset.audio_files) == 0:
+                try:
+                    print(f"Using Cadenza dataloaders. Train batches: {len(train_dataloader)}, Val batches: {len(val_dataloader)}")
+                except Exception:
+                    print("Using Cadenza dataloaders (batch counts unavailable).")
+        else:
+            # Fallback: use local CadenzaDataset directly (expects the cadenza_data dir)
+            # The project 'code' directory may not be a Python package, so import by file path
+            import importlib.util
+            data_loading_path = project_root / 'code' / 'data_loading.py'
+            if not data_loading_path.exists():
+                if RANK == 0:
+                    print(f"Error: data_loading.py not found at expected path: {data_loading_path}")
+                raise FileNotFoundError(f"data_loading.py not found at {data_loading_path}")
+
+            spec = importlib.util.spec_from_file_location("project_data_loading", str(data_loading_path))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            CadenzaDataset = getattr(module, 'CadenzaDataset')
+            pad_collate = getattr(module, 'pad_collate', None)
+            full_dataset = CadenzaDataset(cadenza_dir)
+            if len(full_dataset) == 0:
+                if RANK == 0:
+                    print(f"Error: No valid audio files found in {cadenza_dir}")
+                cleanup_ddp()
+                return
+            train_size = int(0.95 * len(full_dataset))
+            val_size = len(full_dataset) - train_size
+            train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
+            train_sampler = DistributedSampler(train_dataset, shuffle=True) if WORLD_SIZE > 1 else None
+            # Use the provided pad_collate if available so variable-length audio is padded
+            collate_fn = pad_collate if 'pad_collate' in locals() and pad_collate is not None else None
+            train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=(train_sampler is None), sampler=train_sampler, num_workers=0, pin_memory=True, collate_fn=collate_fn)
+            val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0, collate_fn=collate_fn)
             if RANK == 0:
-                print(f"Error: No audio files found in {DATASET_PATH}")
-                print("Please check that the dataset path contains audio files")
-            cleanup_ddp()
-            return
-            
-        if RANK == 0:
-            print(f"Dataset loaded successfully!")
-            print(f"Total audio files: {len(full_dataset.audio_files)}")
-            print(f"Total training samples: {len(full_dataset)}")
-            
-            # Show sample files for verification
-            if full_dataset.audio_files:
-                print(f"Sample files: {[f.name for f in full_dataset.audio_files[:3]]}")
-            
+                print(f"Using Cadenza dataset with {len(full_dataset)} audio files; train batches: {len(train_dataloader)}")
     except Exception as e:
         if RANK == 0:
-            print(f"Error loading VCTK dataset: {e}")
-            print("Please check the dataset path and structure")
-            print("Expected structure: VCTK-Corpus-0.92/wav48_silence_trimmed/{speaker_id}/")
+            print(f"Error creating dataset loaders: {e}")
         cleanup_ddp()
         return
 
-    # Split manually for simplicity
-    train_size = int(0.95 * len(full_dataset))
-    val_size = len(full_dataset) - train_size
-    train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
-    
-    train_sampler = DistributedSampler(train_dataset, shuffle=True) if WORLD_SIZE > 1 else None
-    train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=(train_sampler is None), sampler=train_sampler, num_workers=0, pin_memory=True)
-    val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0) # this may need to be adjusted based on your system and speed requirements
+    # Ensure dataloaders exist. If they weren't created above (e.g. when using the fallback CadenzaDataset),
+    # create them here using pad_collate when available so variable-length audio is handled correctly.
+    if 'train_dataloader' not in locals() or train_dataloader is None:
+        if full_dataset is None:
+            if RANK == 0:
+                print("Error: full_dataset is not available to create dataloaders.")
+            cleanup_ddp()
+            return
+
+        train_size = int(0.95 * len(full_dataset))
+        val_size = len(full_dataset) - train_size
+        train_dataset, val_dataset = torch.utils.data.random_split(full_dataset, [train_size, val_size])
+        train_sampler = DistributedSampler(train_dataset, shuffle=True) if WORLD_SIZE > 1 else None
+
+        collate_fn = None
+        if 'pad_collate' in locals() and pad_collate is not None:
+            collate_fn = pad_collate
+
+        train_dataloader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=(train_sampler is None), sampler=train_sampler, num_workers=0, pin_memory=True, collate_fn=collate_fn)
+        val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=0, collate_fn=collate_fn)
+        if RANK == 0:
+            print(f"Using Cadenza dataset with {len(full_dataset)} audio files; train batches: {len(train_dataloader)}")
 
     writer = SummaryWriter(log_dir=LOG_DIR / f"run_{time.strftime('%Y%m%d-%H%M%S')}") if RANK == 0 else None
 
@@ -1032,6 +1148,9 @@ def main():
     all_params = list(encoder.parameters()) + list(diffusion_decoder.parameters())
     if USE_HYBRID_TRAINING and ar_decoder is not None:
         all_params.extend(list(ar_decoder.parameters()))
+    # Hearing loss projection (maps scalar hearing loss value to embedding space)
+    hearing_proj = nn.Linear(1, N_EMBED).to(DEVICE)
+    all_params.extend(list(hearing_proj.parameters()))
     optimizer = torch.optim.AdamW(all_params, lr=LEARNING_RATE)
     
     # Improved scheduler with warmup and min learning rate
@@ -1074,15 +1193,51 @@ def main():
                 torch.compiler.cudagraph_mark_step_begin()
                 
             batch = next(iter(train_dataloader))
-            source_tokens, target_tokens = batch
-            source_tokens, target_tokens = source_tokens.to(DEVICE), target_tokens.to(DEVICE)
+            # Support two dataloader modes:
+            # - VCTKPairDataset: returns (source_tokens, target_tokens) already tokenized
+            # - CadenzaDataset (repo): returns dict with raw audio and metadata
+            hearing_tensor = None
+            if isinstance(batch, dict):
+                signals = batch['signal']  # [B, C, L]
+                sample_rates = batch.get('sample_rate', None)
+                metadata = batch.get('metadata', None)
+                B = signals.size(0)
+                token_tensors = []
+                for i in range(B):
+                    wav = signals[i]
+                    sr = sample_rates[i] if sample_rates is not None else TARGET_SAMPLE_RATE
+                    try:
+                        wav_conv = convert_audio(wav, sr, TARGET_SAMPLE_RATE, encodec_model.channels).to(DEVICE)
+                        with torch.no_grad():
+                            enc = encodec_model.encode(wav_conv.unsqueeze(0))
+                            toks = enc[0][0][0, 0, :].cpu()
+                    except Exception:
+                        toks = torch.randint(0, encodec_model.quantizer.bins - 1, (BLOCK_SIZE,), dtype=torch.long)
+                    # pad/truncate
+                    if toks.size(0) > BLOCK_SIZE:
+                        toks = toks[:BLOCK_SIZE]
+                    else:
+                        pad = torch.full((BLOCK_SIZE - toks.size(0),), MASK_TOKEN_ID, dtype=torch.long)
+                        toks = torch.cat([toks, pad])
+                    token_tensors.append(toks)
+                source_tokens = torch.stack(token_tensors).to(DEVICE)
+                target_tokens = source_tokens.clone()
+                if metadata is not None:
+                    hearing_tensor = hearing_loss_to_tensor(metadata, device=DEVICE)
+            else:
+                source_tokens, target_tokens = batch
+                source_tokens, target_tokens = source_tokens.to(DEVICE), target_tokens.to(DEVICE)
         except Exception as e:
             if RANK == 0:
                 print(f"Error loading batch: {e}")
             continue
         
-        # Get conditioning vector from the source audio
+        # Get conditioning vector from the source tokens and inject hearing-loss conditioning if available
         conditioning_vector = encoder(source_tokens)
+        if 'hearing_tensor' in locals() and hearing_tensor is not None:
+            # hearing_tensor is shape (B,), project to (B, N_EMBED) and add
+            hearing_embed = hearing_proj(hearing_tensor.unsqueeze(-1))
+            conditioning_vector = conditioning_vector + hearing_embed
 
         # Use mixed precision if enabled
         if USE_MIXED_PRECISION and scaler is not None:
@@ -1141,6 +1296,80 @@ def main():
             loss.backward()
             torch.nn.utils.clip_grad_norm_(all_params, GRADIENT_CLIP_VAL)
             optimizer.step()
+
+        # ------------------ Checkpointing (every 50 iters) ------------------
+        # Save model checkpoints outside the model folder so they are easy to find
+        try:
+            if RANK == 0 and (iter_num % 50 == 0 and iter_num > 0):
+                # compute project root (3 levels up from this file)
+                project_root = Path(__file__).resolve().parents[3]
+                checkpoints_root = project_root / "checkpoints" / f"run_{time.strftime('%Y%m%d-%H%M%S')}"
+                checkpoints_root.mkdir(parents=True, exist_ok=True)
+
+                ckpt_path = checkpoints_root / f"checkpoint_{iter_num:06d}.pt"
+                state = {
+                    'iter': iter_num,
+                    'encoder': (encoder.module.state_dict() if hasattr(encoder, 'module') else encoder.state_dict()),
+                    'diffusion': (diffusion_decoder.module.state_dict() if hasattr(diffusion_decoder, 'module') else diffusion_decoder.state_dict()),
+                    'optimizer': optimizer.state_dict(),
+                    'scheduler': scheduler.state_dict(),
+                }
+                if 'ar_decoder' in locals() and ar_decoder is not None:
+                    state['ar_decoder'] = (ar_decoder.module.state_dict() if hasattr(ar_decoder, 'module') else ar_decoder.state_dict())
+
+                torch.save(state, ckpt_path)
+                print(f"Saved checkpoint: {ckpt_path}")
+
+        except Exception as e:
+            # don't crash training for a checkpoint failure, just log
+            if RANK == 0:
+                print(f"Warning: failed to save checkpoint at iter {iter_num}: {e}")
+
+        # ------------------ Quick evaluation sample dump ------------------
+        try:
+            if RANK == 0 and (iter_num % EVAL_INTERVAL == 0):
+                # create eval output folder next to checkpoints
+                project_root = Path(__file__).resolve().parents[3]
+                checkpoints_root = project_root / "checkpoints" / f"run_{time.strftime('%Y%m%d-%H%M%S')}"
+                eval_root = checkpoints_root / "eval_samples"
+                eval_root.mkdir(parents=True, exist_ok=True)
+
+                # grab a single batch from validation loader and save the first sample
+                try:
+                    val_batch = next(iter(val_dataloader))
+                except Exception:
+                    val_batch = None
+
+                sample_dump = {'iter': iter_num}
+                if val_batch is not None:
+                    try:
+                        # assume val_batch is (source_tokens, target_tokens) like current training flow
+                        if isinstance(val_batch, (list, tuple)) and len(val_batch) >= 2:
+                            source_tokens = val_batch[0][0].detach().cpu()
+                            target_tokens = val_batch[1][0].detach().cpu()
+                            sample_dump['source_tokens'] = source_tokens
+                            sample_dump['target_tokens'] = target_tokens
+                        else:
+                            # fallback: save whatever is in the batch
+                            sample_dump['raw_batch'] = val_batch
+                    except Exception:
+                        sample_dump['raw_batch'] = val_batch
+
+                # attempt to generate tokens if helper generation functions are available
+                try:
+                    if 'autoregressive_generate' in globals() and ar_decoder is not None:
+                        conditioning = encoder(source_tokens.unsqueeze(0).to(DEVICE)) if 'source_tokens' in locals() else None
+                        gen_tokens = autoregressive_generate(ar_decoder, conditioning, max_length=BLOCK_SIZE)
+                        sample_dump['generated_tokens'] = gen_tokens.detach().cpu()
+                except Exception as e:
+                    sample_dump['generation_error'] = str(e)
+
+                eval_path = eval_root / f"eval_iter_{iter_num:06d}.pt"
+                torch.save(sample_dump, eval_path)
+                print(f"Saved eval sample dump: {eval_path}")
+        except Exception as e:
+            if RANK == 0:
+                print(f"Warning: failed to dump eval sample at iter {iter_num}: {e}")
         
         # Learning rate warmup
         if iter_num < WARMUP_STEPS:
