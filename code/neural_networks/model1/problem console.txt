@@ -1,0 +1,51 @@
+.py
+C:\Users\GGPC\Documents\big_one\Audio_challange_machine_learning\.venv\Lib\site-packages\torch\nn\utils\weight_norm.py:144: FutureWarning: `torch.nn.utils.weight_norm` is deprecated in favor of `torch.nn.utils.parametrizations.weight_norm`.  
+  WeightNorm.apply(module, name, dim)
+Initialized Speech Encoder.
+Initialized Autoregressive Decoder for sequential modeling.
+--- Conditional AudioConformerUNet Architecture ---
+Using Conformer: True, BitNet: False, MoE: False (4 experts)
+Layers: 8 total, Embed Dim: 64, Heads: 4
+Gradient Checkpointing: False
+Processing Audio with S2S Model:   0%|                                                            | 0/3 [00:00<?, ?it/s]C:\Users\GGPC\Documents\big_one\Audio_challange_machine_learning\.venv\Lib\site-packages\torchaudio\_backend\utils.py:213: UserWarning: In 2.9, this function's implementation will be changed to use torchaudio.load_with_torchcodec` under the hood. Some parameters like ``normalize``, ``format``, ``buffer_size``, and ``backend`` will be ignored. We recommend that you port your code to rely directly on TorchCodec's decoder instead: https://docs.pytorch.org/torchcodec/stable/generated/torchcodec.decoders.AudioDecoder.html#torchcodec.decoders.AudioDecoder.
+  warnings.warn(
+WARNING:root:Autoregressive generation failed: random_ expects 'from' to be less than 'to', but got from=0 >= to=-3
+                                                                                                                        WARNING:root:Diffusion generation failed: index out of range in self                                                      
+WARNING:root:All generation methods failed, returning input
+WARNING:root:Autoregressive generation failed: random_ expects 'from' to be less than 'to', but got from=0 >= to=-3
+                                                                                                                        WARNING:root:Diffusion generation failed: index out of range in self
+WARNING:root:All generation methods failed, returning input
+WARNING:root:Autoregressive generation failed: random_ expects 'from' to be less than 'to', but got from=0 >= to=-3
+                                                                                                                        WARNING:root:Diffusion generation failed: index out of range in self
+WARNING:root:All generation methods failed, returning input
+WARNING:root:Autoregressive generation failed: random_ expects 'from' to be less than 'to', but got from=0 >= to=-3
+                                                                                                                        WARNING:root:Diffusion generation failed: index out of range in self
+WARNING:root:All generation methods failed, returning input
+Processing Audio with S2S Model:  33%|█████████████████▎                                  | 1/3 [00:05<00:10,  5.10s/it]C:\Users\GGPC\Documents\big_one\Audio_challange_machine_learning\.venv\Lib\site-packages\torchaudio\_backend\utils.py:213: UserWarning: In 2.9, this function's implementation will be changed to use torchaudio.load_with_torchcodec` under the hood. Some parameters like ``normalize``, ``format``, ``buffer_size``, and ``backend`` will be ignored. We recommend that you port your code to rely directly on TorchCodec's decoder instead: https://docs.pytorch.org/torchcodec/stable/generated/torchcodec.decoders.AudioDecoder.html#torchcodec.decoders.AudioDecoder.
+  warnings.warn(
+WARNING:root:Autoregressive generation failed: random_ expects 'from' to be less than 'to', but got from=0 >= to=-3
+                                                                                                                        WARNING:root:Diffusion generation failed: index out of range in self
+WARNING:root:All generation methods failed, returning input
+WARNING:root:Autoregressive generation failed: random_ expects 'from' to be less than 'to', but got from=0 >= to=-3
+                                                                                                                        WARNING:root:Diffusion generation failed: index out of range in self
+WARNING:root:All generation methods failed, returning input
+WARNING:root:Autoregressive generation failed: random_ expects 'from' to be less than 'to', but got from=0 >= to=-3
+                                                                                                                        WARNING:root:Diffusion generation failed: index out of range in self
+WARNING:root:All generation methods failed, returning input
+WARNING:root:Autoregressive generation failed: random_ expects 'from' to be less than 'to', but got from=0 >= to=-3
+                                                                                                                        WARNING:root:Diffusion generation failed: index out of range in self
+WARNING:root:All generation methods failed, returning input
+Processing Audio with S2S Model:  67%|██████████████████████████████████▋                 | 2/3 [00:07<00:03,  3.34s/it]WARNING:root:Autoregressive generation failed: random_ expects 'from' to be less than 'to', but got from=0 >= to=-3       
+                                                                                                                        WARNING:root:Diffusion generation failed: index out of range in self
+WARNING:root:All generation methods failed, returning input
+WARNING:root:Autoregressive generation failed: random_ expects 'from' to be less than 'to', but got from=0 >= to=-3      
+                                                                                                                        WARNING:root:Diffusion generation failed: index out of range in self
+WARNING:root:All generation methods failed, returning input
+Processing Audio with S2S Model: 100%|████████████████████████████████████████████████████| 3/3 [00:08<00:00,  2.81s/it] 
+
+=== S2S Neural Network Test Complete ===
+Processed 10 audio samples
+Results saved to: C:\Users\GGPC\Documents\big_one\Audio_challange_machine_learning\results\s2s_neural_network_test       
+Debug pairs (before/after): 10
+Enhanced audio files show the effect of your trained model!
+Note: Files now include hearing loss labels in filenames for easy comparison

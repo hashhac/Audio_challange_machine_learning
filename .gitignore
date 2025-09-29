@@ -13,3 +13,5 @@ code/audio_files/16981327/cadenza_clip1_data.valid.v1.0.tar.gz
 Audio_challange_machine_learning/checkpoints/run_20250929-224115
 Audio_challange_machine_learning/code/neural_networks/model1/model.pt
 checkpoints/run_20250929-224115/eval_samples/eval_iter_001300.pt
+Audio_challange_machine_learning/s2s_audio_samples/testing_results
+Audio_challange_machine_learning/s2s_audio_samples
